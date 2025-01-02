@@ -5,6 +5,7 @@ use bevy::{
     sprite::{MaterialMesh2dBundle, Mesh2dHandle},
 };
 use bevy::window::PrimaryWindow;
+use std::f32::NAN;
 // use rand::Rng;
 
 use crate:: settings:: *;
@@ -17,19 +18,17 @@ impl Plugin for SBPlugin{
             #[cfg(not(target_arch = "wasm32"))]
             Wireframe2dPlugin,
         ))
-        .add_systems(Startup, spawn_sb_parent)
-        .add_systems(Update, (spawn_sb, update_sb, update_sb_draw));
+        .add_systems(Update, (spawn_sb, update_processes, update_sb_draw))
+        .add_systems(Update, interact);
     }
 }
-
-#[derive(Component)]
-pub struct SBParent;
 
 #[derive(Component)]
 pub struct SB{
     pub nodes: Vec<SBNode>,
     pub connections: Vec<SBConnection>,
     pub base_skeleton: Vec<Vec2>,
+    pub base_skeleton_norm: Vec<Vec2>,
     pub skeleton: Vec<Vec2>,
 
     pub node_num: u8,
@@ -39,6 +38,39 @@ pub struct SB{
 }
 
 impl SB{
+    fn new(nodes: &Vec<SBNode>, connections: &Vec<SBConnection>) -> Self{
+        let node_num : u8 = nodes.len() as u8; 
+
+        let mut center = Vec2::ZERO;
+
+        for node in nodes{
+            center += node.pos;
+        }
+
+        center /= node_num as f32;        
+
+        let mut base_skeleton: Vec<Vec2> = vec![Vec2::ZERO; node_num as usize];
+        let mut base_skeleton_norm: Vec<Vec2> = vec![Vec2::ZERO; node_num as usize];
+
+
+        for i in 0..(node_num as usize){
+            base_skeleton[i] = nodes[i].pos - center;
+            base_skeleton_norm[i] = (nodes[i].pos - center).normalize();
+        }
+
+        return SB{
+            nodes: nodes.clone(),
+            connections: connections.clone(),
+            base_skeleton: base_skeleton,
+            base_skeleton_norm: base_skeleton_norm,
+            skeleton: vec![Vec2::ZERO; node_num as usize],
+            node_num: node_num,
+            bounding_box: BoundingBox::zero(),
+            center: center,
+            angle: 0.0,
+        }
+    }
+
     fn get_center(&self) -> Vec2{
         let mut average_pos = Vec2::ZERO;
         
@@ -48,17 +80,83 @@ impl SB{
 
         return average_pos / (self.node_num as f32);
     }
+
+    fn get_angle(&self) -> f32{
+        let mut average_angle : f32 = 0.0;
+
+        for i1 in 0..(self.node_num as usize){
+            let vec1 = (self.nodes[i1].pos - self.center).normalize();
+            let vec2 = self.base_skeleton[i1].normalize();
+
+            let dot = vec1.dot(vec2).clamp(-1.0, 1.0);
+
+            let cross = vec1.perp_dot(vec2);
+
+            let angle: f32;
+
+            if cross < 0.0{
+                angle = dot.acos();
+            }
+            else{
+                angle = TAU - dot.acos();
+            }
+
+            if angle - average_angle < PI{
+                average_angle += angle / (self.node_num as f32);
+            }
+            else{
+                average_angle -= (TAU - angle) / (self.node_num as f32);
+            }
+        }
+
+        return average_angle;
+    }
+
+    fn update_skeleton(&mut self){
+        let mut counter: usize = 0;
+
+        for vec in &self.base_skeleton{
+            self.skeleton[counter] = vec_rotate(vec, self.angle) + self.center;
+
+            counter += 1;
+        }
+    }
+
+    fn update_bounding_box(&mut self){
+        let mut min_vec: Vec2 = Vec2::new(100000.0, 100000.0);
+        let mut max_vec: Vec2 = Vec2::new(-100000.0, -100000.0);
+
+        for node in &self.nodes{
+            if node.pos.x < min_vec.x{
+                min_vec.x = node.pos.x;
+            }
+            else if node.pos.x > max_vec.x{
+                max_vec.x = node.pos.x;
+            }
+
+            if node.pos.y < min_vec.y{
+                min_vec.y = node.pos.y;
+            }
+            else if node.pos.y > max_vec.y{
+                max_vec.y = node.pos.y;
+            }
+        }
+
+        self.bounding_box.min_pos = min_vec;
+        self.bounding_box.max_pos = max_vec; 
+    }
 }
 
 #[derive(Clone)]
 pub struct SBNode{
-    pub pos: Vec2,
+    pub read_pos: Vec2,
     pub vel: Vec2,
+    pub recently_collided: bool,
 }
 
 impl SBNode{
     fn new(pos: Vec2) -> Self{
-        Self{pos:pos, vel: Vec2::ZERO}
+        Self{pos:pos, vel: Vec2::ZERO, recently_collided: false}
     }
 }
 
@@ -99,8 +197,274 @@ struct ConnectionIndex{
     i2: usize
 }
 
-fn spawn_sb_parent(mut commands: Commands){
-    commands.spawn((SpatialBundle::default(), SBParent, Name::new("Soft Body Parent")));
+
+fn vec_rotate(
+    vec: &Vec2,
+    angle: f32,
+) -> Vec2{
+    let cos_angle: f32 = angle.cos();
+    let sin_angle: f32 = angle.sin();
+
+    let x_rot: f32 = vec.x * cos_angle - vec.y * sin_angle;
+    let y_rot: f32 = vec.x * sin_angle + vec.y * cos_angle;
+
+    return Vec2::new(x_rot, y_rot);
+}
+
+fn axis_aligned_line_overlap(
+    min_l1: f32,
+    max_l1: f32,
+    min_l2: f32,
+    max_l2: f32,
+) -> bool{
+    return (min_l2 >= min_l1 && min_l2 <= max_l1) || (max_l2 >= min_l1 && max_l2 <= max_l1);
+}
+
+fn bounding_box_collision(
+    bb1: &mut BoundingBox,
+    bb2: &mut BoundingBox,
+) -> bool{
+    return axis_aligned_line_overlap(bb1.min_pos.x, bb1.max_pos.x, bb2.min_pos.x, bb2.max_pos.x) && axis_aligned_line_overlap(bb1.min_pos.y, bb1.max_pos.y, bb2.min_pos.y, bb2.max_pos.y);
+}
+
+fn soft_body_collision(
+    sb1: &mut SB,
+    sb2: &mut SB,
+){
+    // if bounding_box_collision(&mut sb1.bounding_box, &mut sb2.bounding_box){
+
+    if true{
+        let mut counter = 0;
+        for mut node in &mut sb1.nodes{
+            // point intersection
+
+            // println!("atlesast atleast here");
+            if sb_point_intersection(node.pos, sb2){
+                node.recently_collided = true;
+                // println!("atleast heere");
+                
+                let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.pos, sb1.center, sb2);
+
+                let connection = &sb2.connections[conn_index];
+
+                // the program probably found a faulty intersection
+                if dist >= connection.resting_length{
+                    // println!("here");
+                    continue;
+                }
+                
+                soft_body_collision_response(&mut node, sb2, connection.i1, connection.i2, coll_pt, dot);
+                
+            }
+
+            counter += 1;
+        }
+    }
+}
+
+fn soft_body_collision_response(
+    node: &mut SBNode,
+    sb2: &mut SB,
+    con_pt1_index: usize,
+    con_pt2_index: usize,
+    coll_pos: Vec2,
+    dot: f32,
+){
+    let vec = node.pos - coll_pos;
+
+    let node_vec = -vec;
+    let con_pt1_vec = vec * dot;
+    let con_pt2_vec = vec * (1.0-dot);
+
+    node.pos += node_vec;
+    sb2.nodes[con_pt1_index].pos += con_pt1_vec;
+    sb2.nodes[con_pt2_index].pos += con_pt2_vec;
+
+    node.vel += node_vec;
+    sb2.nodes[con_pt1_index].vel += con_pt1_vec;
+    sb2.nodes[con_pt2_index].vel += con_pt2_vec;
+}
+
+
+// true if left and false if right
+fn line_pt_lateral(
+    pt: Vec2,
+    line_pt1: Vec2,
+    line_pt2: Vec2,
+) -> bool{
+    let ab: Vec2;
+
+    if line_pt2.y > line_pt1.y{
+        ab = line_pt2 - line_pt1;
+    }
+    else{
+        ab = line_pt1 - line_pt2;
+    }
+
+    let ap = pt - line_pt1;
+
+    return ab.perp_dot(ap) > 0.0;
+}
+
+fn sb_point_intersection(
+    pt: Vec2,
+    sb: &mut SB,
+) -> bool{
+    let mut intersection_counter_x = 0;
+
+    for connection in &sb.connections{
+        // dont want to consider edges
+        if !connection.is_edge{
+            continue;
+        }
+
+        // make sure the line is to the left
+        let lateral = line_pt_lateral(pt, sb.nodes[connection.i1].pos, sb.nodes[connection.i2].pos);
+
+        if lateral{
+            let y1 = sb.nodes[connection.i1].pos.y;
+            let y2 = sb.nodes[connection.i2].pos.y;
+
+            if y1 > y2{
+                if pt.y <= y1 && pt.y >= y2{
+                    intersection_counter_x += 1;
+                }
+            }
+            else{
+                if pt.y >= y1 && pt.y <= y2{
+                    intersection_counter_x += 1;
+                }
+            }
+        }
+    }
+
+    return intersection_counter_x % 2 == 1;
+}
+
+// returns the distance from edge and 
+// how far along the edge
+fn point_line_dist(
+    node_pt: Vec2,
+    line_pt1: Vec2,
+    line_pt2: Vec2,
+) -> (Vec2, f32){
+  let ab = line_pt2 - line_pt1;
+  let ap = node_pt - line_pt1;
+  
+  let t = ap.dot(ab) / ab.dot(ab);
+
+  return (line_pt1 + (line_pt2 - line_pt1) * t, t);
+}
+
+fn get_closest_edge(
+    node_pos: Vec2,
+    center: Vec2, 
+    sb: &mut SB,
+) -> (Vec2, f32, usize, f32){
+    let mut min_dist : f32 = 100000000.0; // distance to edge
+    let mut best_pt : Vec2 = Vec2::ZERO; // point on edge
+    let mut connection_index: usize = 0; // edge index
+    let mut fin_dot:f32 = 0.0; // how far along the edge
+
+    let mut counter: usize = 0;
+
+    for connection in &sb.connections{
+
+        // edges cannot be colliding
+        if !connection.is_edge{
+            continue;
+        }
+
+        let pt1 = &sb.nodes[connection.i1];
+        let pt2 = &sb.nodes[connection.i2];
+
+        // dis from edge and how far along the edge is
+        let (closest_pt, dot) = point_line_dist(node_pos, pt1.pos, pt2.pos);
+
+        // make sure the point is near the line
+        if dot > 1.0 || dot < -0.0{
+            // println!("dot skip");
+            continue;
+        }
+
+        let mut connection_normal = (pt1.pos - pt2.pos).normalize().perp();
+
+        // make sure normal is facing outwards
+        if (sb.center - closest_pt).normalize().dot(connection_normal) > 0.0{
+            connection_normal = -connection_normal;
+        }
+
+        let center_to_point = (center - closest_pt).normalize();
+
+        // make sure the center is facing the outside
+        if connection_normal.dot(center_to_point) < 0.2{
+            continue;
+        }
+
+        let dist = (closest_pt - node_pos).length_squared();
+
+        if dist < min_dist{
+            best_pt = closest_pt;
+            min_dist = dist;
+            connection_index = counter;
+            fin_dot = dot;
+            // println!("new min dist {}, new conn index {}", min_dist, connection_index);
+        }
+
+        counter += 1;
+    }
+
+    return (best_pt, min_dist.sqrt(), connection_index, fin_dot);
+}
+
+fn interact(
+    mut commands: Commands,
+    mut SB_query: Query<&mut SB>,
+    time: Res<Time>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    mouseInput: Res<ButtonInput<MouseButton>>,
+    keyInput: Res<ButtonInput<KeyCode>>,
+){
+    let mut position = Vec2::new(0.0, 0.0);
+
+    if let Some(mouse_position) = q_windows.single().cursor_position() {
+        // println!("Cursor is inside the primary window, at {:?}", position);
+        position = Vec2::new(mouse_position.x, mouse_position.y);
+    } else {
+        // println!("Cursor is not in the game window.");
+    }
+
+    let mut rel_position: Vec2 = position - HALF_DIM;
+    rel_position.y = -rel_position.y;
+
+
+
+    // is this ugly? yes. But hey I acknowledged it, and thats what matters
+    if mouseInput.pressed(MouseButton::Left) {
+        let mut min_dist : f32 = 100000.0;        
+        
+        for sb in &mut SB_query{
+            for node in &sb.nodes{
+                let dist: f32 = (rel_position - node.pos).length();
+                
+                if dist < min_dist{
+                    min_dist = dist
+                }
+            }
+        }
+        
+        for mut sb in &mut SB_query{
+            for mut node in &mut sb.nodes{
+                let dist: f32 = (rel_position - node.pos).length();
+                
+                if dist == min_dist{
+                    node.pos = rel_position;
+                    node.vel = Vec2::ZERO;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn spawn_sb(
@@ -132,24 +496,16 @@ fn spawn_sb(
         SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
         SBConnection::new(3, 2, true, DEFAULT_RESTING_LENGTH),
         SBConnection::new(2, 0, true, DEFAULT_RESTING_LENGTH),
-        SBConnection::new(0, 3, false, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(0, 3, false, 141.0),
+        SBConnection::new(1, 2, false, 141.0)
     ];
 
-    let base_skeleton = vec![];
-    let skeleton = vec![];
+    // let base_skeleton = vec![];
+    // let skeleton = vec![];
 
     let node_num : u8 = 4;
 
-    let soft_body = SB{
-        nodes: node_vec.clone(),
-        connections: connection_vec.clone(),
-        base_skeleton: base_skeleton,
-        skeleton: skeleton,
-        node_num: node_num,
-        bounding_box: BoundingBox::zero(),
-        center: Vec2::new(0.0, 0.0),
-        angle: 0.0,
-    };
+    let soft_body = SB::new(&node_vec, &connection_vec);
 
     // Spawns the soft body 
     // commands.entity(parent).with_children(|commands|{
@@ -211,21 +567,136 @@ fn spawn_sb(
     info!("Spawned new Soft Body");
 }
 
-fn update_sb(
-    mut sbObjectQuery: Query<&mut SB>,
+fn update_processes(
+    mut SB_query: Query<&mut SB>,
     time: Res<Time>,
 ){
-    for mut sbObject in &mut sbObjectQuery{
+    for mut sbObject in &mut SB_query{
         for mut node in &mut sbObject.nodes{
-            node.vel -= GRAVITY * time.delta_seconds() * ITERATION_DELTA;
-            node.pos += node.vel * time.delta_seconds() * ITERATION_DELTA;
+            node.recently_collided = false;
+        } 
+    }
+
+    for i in 0..ITERATION_COUNT{
+        update_sb(&mut SB_query, time.delta_seconds() as f32);
+        update_sb_collisions(&mut SB_query, time.delta_seconds() as f32);
+    }
+
+    
+}
+
+fn update_sb(
+    mut sbObjectQuery: &mut Query<&mut SB>,
+    dt: f32,
+){
+    for mut sbObject in sbObjectQuery{
+        for mut node in &mut sbObject.nodes{
+            node.vel -= GRAVITY * dt * ITERATION_DELTA;
+            node.pos += node.vel * dt * ITERATION_DELTA;
         }
+        container_collision(&mut sbObject);
+        simulation_update(&mut sbObject, dt as f32);
 
         sbObject.center = sbObject.get_center();
-        // println!("{:?}", sbObject.center)
+        sbObject.angle = sbObject.get_angle();
+
+        sbObject.update_skeleton();
+
+        // skeleton_simulation(&mut sbObject, dt as f32);
+
+        sbObject.update_bounding_box();
     }
 }
 
+fn update_sb_collisions(
+    mut sbObjectQuery: &mut Query<&mut SB>,
+    dt: f32,
+){
+    let mut iter = sbObjectQuery.iter_combinations_mut();
+
+    while let Some([mut SB1, mut SB2]) =
+        iter.fetch_next()
+    {
+        soft_body_collision(&mut SB1, &mut SB2);
+        soft_body_collision(&mut SB2, &mut SB1);
+    }
+    
+}
+
+fn container_collision(
+    mut sbObject: &mut SB,
+){
+    for mut node in &mut sbObject.nodes{
+        if node.pos.y < -HALF_DIM.y{
+            node.pos.y = -HALF_DIM.y;
+            node.vel.y = 0.0;
+        }
+
+        if node.pos.x > HALF_DIM.x{
+            node.pos.x = HALF_DIM.x;
+            node.vel.x = 0.0;
+        }
+
+        else if node.pos.x < -HALF_DIM.x{
+            node.pos.x = -HALF_DIM.x;
+            node.vel.x = 0.0;
+        }
+    }
+}
+
+fn simulation_update(
+    mut sbObject: &mut SB,
+    dt: f32,
+){
+    for connection in &sbObject.connections{
+        let node1 = &sbObject.nodes[connection.i1];
+        let node2 = &sbObject.nodes[connection.i2];
+
+        let vec = node2.pos - node1.pos;
+        let vec_norm = vec.normalize();
+
+        if vec_norm.is_nan(){
+            continue;
+        }
+
+        let vec_length = vec.length();
+
+        let vel_diff = node2.vel - node1.vel;
+        
+        let dot = vec_norm.dot(vel_diff);
+
+        let spring_strength = connection.resting_length - vec_length;
+
+        let force = ((DEFAULT_STIFFNESS * spring_strength) - (dot * 0.5 * DEFAULT_DAMPENING)).clamp(-1000.0, 1000.0);
+
+        sbObject.nodes[connection.i1].vel -= vec_norm * force * dt;
+        sbObject.nodes[connection.i2].vel += vec_norm * force * dt;
+    }
+}
+
+fn skeleton_simulation(
+    mut sbObject: &mut SB,
+    dt: f32,
+){
+    for index in 0..(sbObject.node_num as usize){
+        let mut node1 = &mut sbObject.nodes[index];
+        let skeleton_pos = &sbObject.skeleton[index];
+
+        let vec = *skeleton_pos - node1.pos;
+        let vec_norm = vec.normalize();
+
+        if vec_norm.is_nan(){
+            continue;
+        }
+
+        let force = (3.0 * -vec.length()).clamp(-1000.0, 1000.0);
+        // let force = 1.0;
+
+        // println!("pos {}", vec_norm);
+
+        node1.vel -= vec_norm * force * dt;
+    }
+}
 
 fn update_sb_draw(
     soft_body_query: Query<(&SB, &Children)>,
@@ -233,23 +704,22 @@ fn update_sb_draw(
         Query<(&mut Transform, &NodeIndex)>,
         Query<(&mut Transform, &ConnectionIndex)>,
     )>,
-    // mut node_query: Query<(&mut Transform, &NodeIndex)>,
-    // mut line_query: Query<(&mut Transform, &ConnectionIndex)>,
 ) {
-    // let mut query_1 = param_set.p0();
-    // let mut query_2 = param_set.p1();
-
     for (soft_body, children) in &soft_body_query {
         for child in children {
-            // println!("{:?}", child);
 
             if let Ok((mut transform, point_marker)) = param_set.p0().get_mut(*child) {
                 // Update the position of the node
                 let node = &soft_body.nodes[point_marker.i1];
                 transform.translation = node.pos.extend(0.0);
-            }
 
-            // param_set.p1().get_mut()
+                if node.recently_collided{
+                    transform.scale = Vec3::new(2.0, 2.0, 2.0); 
+                }
+                else{
+                    transform.scale = Vec3::new(1.0, 1.0, 1.0);
+                }
+            }
 
             else if let Ok((mut transform, line_marker)) = param_set.p1().get_mut(*child) {
                 // Update the position and length of the line
@@ -264,7 +734,6 @@ fn update_sb_draw(
                 transform.translation = mid_point.extend(0.0);
                 transform.rotation = Quat::from_rotation_z(angle);
                 transform.scale = Vec3::new(length, 2.0, 1.0)
-                // sprite.custom_size = Some(Vec2::new(length, sprite.custom_size.unwrap().y));
             }
         }
     }
