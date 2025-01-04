@@ -140,20 +140,21 @@ impl SB{
             if node.read_pos.x < min_vec.x{
                 min_vec.x = node.read_pos.x;
             }
-            else if node.read_pos.x > max_vec.x{
+            
+            if node.read_pos.x > max_vec.x{
                 max_vec.x = node.read_pos.x;
             }
 
             if node.read_pos.y < min_vec.y{
                 min_vec.y = node.read_pos.y;
             }
-            else if node.read_pos.y > max_vec.y{
+            if node.read_pos.y > max_vec.y{
                 max_vec.y = node.read_pos.y;
             }
         }
 
-        self.bounding_box.min_pos = min_vec;
-        self.bounding_box.max_pos = max_vec; 
+        self.bounding_box.min_pos = min_vec - Vec2::new(NODE_RADIUS, NODE_RADIUS);
+        self.bounding_box.max_pos = max_vec + Vec2::new(NODE_RADIUS, NODE_RADIUS); 
     }
 }
 
@@ -162,12 +163,11 @@ pub struct SBNode{
     pub read_pos: Vec2,
     pub write_pos: Vec2,
     pub vel: Vec2,
-    pub recently_collided: bool,
 }
 
 impl SBNode{
     fn new(pos: Vec2) -> Self{
-        Self{read_pos:pos, write_pos:pos, vel: Vec2::ZERO, recently_collided: false}
+        Self{read_pos:pos, write_pos:pos, vel: Vec2::ZERO}
     }
 }
 
@@ -234,21 +234,28 @@ fn axis_aligned_line_overlap(
     min_l2: f32,
     max_l2: f32,
 ) -> bool{
-    return (min_l2 >= min_l1 && min_l2 <= max_l1) || (max_l2 >= min_l1 && max_l2 <= max_l1);
+    return min_l1 <= max_l2 && max_l1 >= min_l2;
 }
 
 fn bounding_box_collision(
     bb1: &mut BoundingBox,
     bb2: &mut BoundingBox,
 ) -> bool{
-    return axis_aligned_line_overlap(bb1.min_pos.x, bb1.max_pos.x, bb2.min_pos.x, bb2.max_pos.x) && axis_aligned_line_overlap(bb1.min_pos.y, bb1.max_pos.y, bb2.min_pos.y, bb2.max_pos.y);
+    let thing = axis_aligned_line_overlap(bb1.min_pos.x, bb1.max_pos.x, bb2.min_pos.x, bb2.max_pos.x) && axis_aligned_line_overlap(bb1.min_pos.y, bb1.max_pos.y, bb2.min_pos.y, bb2.max_pos.y);
+
+    // println!("coll:{} min_pos_bb1:{} max_pos_bb1:{} min_pos_bb2:{} max_pos_bb2:{}", thing, bb1.min_pos, bb1.max_pos, bb2.min_pos, bb2.max_pos);
+
+
+    return thing;
 }
 
 fn soft_body_collision(
     sb1: &mut SB,
     sb2: &mut SB,
 ){
-    // if bounding_box_collision(&mut sb1.bounding_box, &mut sb2.bounding_box){
+    if !bounding_box_collision(&mut sb1.bounding_box, &mut sb2.bounding_box){
+        return;
+    }
 
     if true{
         let mut counter = 0;
@@ -257,7 +264,6 @@ fn soft_body_collision(
 
             // println!("atlesast atleast here");
             if sb_point_intersection(node.read_pos, sb2){
-                node.recently_collided = true;
                 // println!("atleast heere");
                 
                 let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.read_pos, sb1.center, sb2);
@@ -525,18 +531,12 @@ fn spawn_sb(
     
     let color = Color::rgb(1.0, 1.0, 1.0);
 
+    // cube
     let node_vec = vec![
-        SBNode::new(Vec2::new(-50.0, 50.0)),
-        SBNode::new(Vec2::new(50.0, 50.0)),
-        SBNode::new(Vec2::new(-50.0, -50.0)),
-        SBNode::new(Vec2::new(50.0, -50.0)),
-    ];
-
-    let node_vec2 = vec![
-        SBNode::new(Vec2::new(-40.0, 350.0)),
-        SBNode::new(Vec2::new(60.0, 350.0)),
-        SBNode::new(Vec2::new(-40.0, 250.0)),
-        SBNode::new(Vec2::new(60.0, 250.0)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
     ];
 
     let connection_vec = vec![
@@ -544,75 +544,69 @@ fn spawn_sb(
         SBConnection::new(0, 2, true, DEFAULT_RESTING_LENGTH),
         SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
         SBConnection::new(2, 3, true, DEFAULT_RESTING_LENGTH),
-        SBConnection::new(0, 3, false, 141.0),
-        SBConnection::new(1, 2, false, 141.0)
+        SBConnection::new(0, 3, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+        SBConnection::new(1, 2, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt())
     ];
 
     // let base_skeleton = vec![];
     // let skeleton = vec![];
 
-    for i in 0..2{
-        let soft_body : SB;
 
-        if i == 0{
-            soft_body = SB::new(&node_vec, &connection_vec);
-        }
-        else{
-            soft_body = SB::new(&node_vec2, &connection_vec);
-        }
+    let soft_body = SB::new(&node_vec, &connection_vec);
 
-        commands.spawn((SpatialBundle::default(), soft_body, Name::new("Soft Body"))).with_children(|parent|{
-            // I guess Im a noob for not using enumerate
-            let mut counter: usize = 0;
 
-            for node in &node_vec {
-                parent.spawn((
-                    MaterialMesh2dBundle{
-                        mesh: shape.clone(),
-                        material: materials.add(color),
-                        transform: Transform{
-                            translation: node.read_pos.extend(0.0),
-                            ..default()
-                        },
+    commands.spawn((SpatialBundle::default(), soft_body, Name::new("Soft Body"))).with_children(|parent|{
+        // I guess Im a noob for not using enumerate
+        let mut counter: usize = 0;
+
+        for node in &node_vec {
+            parent.spawn((
+                MaterialMesh2dBundle{
+                    mesh: shape.clone(),
+                    material: materials.add(color),
+                    transform: Transform{
+                        translation: node.read_pos.extend(0.0),
                         ..default()
                     },
-                    NodeIndex{i1: counter},
-                ));
+                    ..default()
+                },
+                NodeIndex{i1: counter},
+            ));
 
-                counter += 1;
-            }
+            counter += 1;
+        }
 
-            for connection in &connection_vec{
-                // Define the start and end points
-                let start = node_vec[connection.i1].read_pos;
-                let end = node_vec[connection.i2].read_pos;
+        for connection in &connection_vec{
+            // Define the start and end points
+            let start = node_vec[connection.i1].read_pos;
+            let end = node_vec[connection.i2].read_pos;
 
-                // Calculate the midpoint, direction, and length
-                let mid_point = (start + end) / 2.0;
-                let direction = end - start;
-                let length = direction.length();
-                let angle = direction.y.atan2(direction.x);
+            // Calculate the midpoint, direction, and length
+            let mid_point = (start + end) / 2.0;
+            let direction = end - start;
+            let length = direction.length();
+            let angle = direction.y.atan2(direction.x);
 
-                // Spawn a line
-                parent.spawn((
-                    SpriteBundle {
-                        transform: Transform {
-                            translation: Vec3::new(mid_point.x, mid_point.y, 0.0),
-                            rotation: Quat::from_rotation_z(angle),
-                            scale: Vec3::new(length, 2.0, 1.0), // Length and thickness
-                            ..Default::default()
-                        },
-                        sprite: Sprite {
-                            color: Color::rgb(0.8, 0.2, 0.2),
-                            ..Default::default()
-                        },
+            // Spawn a line
+            parent.spawn((
+                SpriteBundle {
+                    transform: Transform {
+                        translation: Vec3::new(mid_point.x, mid_point.y, 0.0),
+                        rotation: Quat::from_rotation_z(angle),
+                        scale: Vec3::new(length, 2.0, 1.0), // Length and thickness
                         ..Default::default()
                     },
-                    ConnectionIndex{i1:connection.i1, i2:connection.i2}
-                ));
-            }
-        });
-    }  
+                    sprite: Sprite {
+                        color: Color::rgb(0.8, 0.2, 0.2),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ConnectionIndex{i1:connection.i1, i2:connection.i2}
+            ));
+        }
+    });
+    
 
     info!("Spawned new Soft Body");
 }
@@ -621,12 +615,6 @@ fn update_processes(
     mut SB_query: Query<&mut SB>,
     time: Res<Time>,
 ){
-    for mut sbObject in &mut SB_query{
-        for mut node in &mut sbObject.nodes{
-            node.recently_collided = false;
-        } 
-    }
-
     for i in 0..ITERATION_COUNT{
         update_sb(&mut SB_query, 0.1 as f32);
         update_sb_collisions(&mut SB_query, 0.1 as f32);
@@ -634,13 +622,13 @@ fn update_processes(
 
     // println!("new");
 
-    let mut counter = 0;
-    for sbObject in &SB_query{
-        // for node in &sbObject.nodes{
-        //     println!("{} {:?} {:?}", counter, world_to_screen_coords(node.read_pos), Vec2::new(node.vel.x, -node.vel.y));
-        // }
-        counter += 1;  
-    }
+    // let mut counter = 0;
+    // for sbObject in &SB_query{
+    //     // for node in &sbObject.nodes{
+    //     //     println!("{} {:?} {:?}", counter, world_to_screen_coords(node.read_pos), Vec2::new(node.vel.x, -node.vel.y));
+    //     // }
+    //     counter += 1;  
+    // }
 
     
 }
@@ -791,13 +779,6 @@ fn update_sb_draw(
                 // Update the position of the node
                 let node = &soft_body.nodes[point_marker.i1];
                 transform.translation = node.read_pos.extend(0.0);
-
-                if node.recently_collided{
-                    transform.scale = Vec3::new(2.0, 2.0, 2.0); 
-                }
-                else{
-                    transform.scale = Vec3::new(1.0, 1.0, 1.0);
-                }
             }
 
             else if let Ok((mut transform, line_marker)) = param_set.p1().get_mut(*child) {
