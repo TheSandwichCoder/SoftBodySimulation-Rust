@@ -14,7 +14,7 @@ pub const DEFAULT_DAMPENING: f32 = 4.0;
 
 pub const GRAVITY: Vec2 = Vec2::new(0.0, 9.87);
 
-pub const ITERATION_COUNT : i32 = 1;
+pub const ITERATION_COUNT : i32 = 10;
 pub const ITERATION_DELTA : f32 = 1.0 / (ITERATION_COUNT as f32);
 
 pub const PI :f32 = OtherPI;

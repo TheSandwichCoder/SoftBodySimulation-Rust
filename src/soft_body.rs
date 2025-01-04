@@ -267,8 +267,8 @@ fn soft_body_collision(
                 let connection = &sb2.connections[conn_index];
 
                 // the program probably found a faulty intersection
-                if dist >= connection.resting_length{
-                    println!("here");
+                if dist >= connection.resting_length/2.0{
+                    // println!("here");
                     counter += 1;
                     continue;
                 }
@@ -332,7 +332,7 @@ fn sb_point_intersection(
     pt: Vec2,
     sb: &mut SB,
 ) -> bool{
-    let mut intersection_counter_x = 0;
+    let mut intersection_counter_y = 0;
 
     for connection in &sb.connections{
         // dont want to consider edges
@@ -347,20 +347,36 @@ fn sb_point_intersection(
             let y1 = sb.nodes[connection.i1].read_pos.y;
             let y2 = sb.nodes[connection.i2].read_pos.y;
 
+            let mut intersect : bool = false;
+
+            // if (y1 - y2).abs() < 0.01 && (pt.y == y1 || pt.y == y2){
+            //     continue;
+            // } 
+
             if y1 > y2{
                 if pt.y <= y1 && pt.y >= y2{
-                    intersection_counter_x += 1;
+                    intersection_counter_y += 1;
+                    intersect = true;
                 }
             }
-            else{
+            else if y1 < y2{
                 if pt.y >= y1 && pt.y <= y2{
-                    intersection_counter_x += 1;
+                    intersection_counter_y += 1;
+                    intersect = true;
                 }
             }
+
+            // if intersect{
+            //     println!("True: pt:{} n1:{} n2:{}", world_to_screen_coords(pt), world_to_screen_coords(sb.nodes[connection.i1].read_pos), world_to_screen_coords(sb.nodes[connection.i2].read_pos));
+            // }
+            // else{
+            //     println!("False pt:{} n1:{} n2:{}", world_to_screen_coords(pt), world_to_screen_coords(sb.nodes[connection.i1].read_pos), world_to_screen_coords(sb.nodes[connection.i2].read_pos));
+            // }
         }
     }
+    // println!("{}", intersection_counter_y);
 
-    return intersection_counter_x % 2 == 1;
+    return intersection_counter_y % 2 == 1;
 }
 
 // returns the distance from edge and 
@@ -542,7 +558,6 @@ fn spawn_sb(
             soft_body = SB::new(&node_vec, &connection_vec);
         }
         else{
-            continue;
             soft_body = SB::new(&node_vec2, &connection_vec);
         }
 
@@ -617,13 +632,13 @@ fn update_processes(
         update_sb_collisions(&mut SB_query, 0.1 as f32);
     }
 
-    println!("new");
+    // println!("new");
 
     let mut counter = 0;
     for sbObject in &SB_query{
-        for node in &sbObject.nodes{
-            println!("{} {:?} {:?}", counter, world_to_screen_coords(node.read_pos), Vec2::new(node.vel.x, -node.vel.y));
-        }
+        // for node in &sbObject.nodes{
+        //     println!("{} {:?} {:?}", counter, world_to_screen_coords(node.read_pos), Vec2::new(node.vel.x, -node.vel.y));
+        // }
         counter += 1;  
     }
 
@@ -644,7 +659,7 @@ fn update_sb(
 ){
     for mut sbObject in sbObjectQuery{
         simulation_update(&mut sbObject, dt as f32);
-        // skeleton_simulation(&mut sbObject, dt as f32);
+        skeleton_simulation(&mut sbObject, dt as f32);
 
         for mut node in &mut sbObject.nodes{
             node.vel -= GRAVITY * dt * ITERATION_DELTA;
@@ -653,10 +668,6 @@ fn update_sb(
         update_sb_read_pos(&mut sbObject);
 
         sbObject.update_bounding_box();
-
-        for node in &sbObject.nodes{
-            println!("r:{:?} w:{:?}", world_to_screen_coords(node.read_pos), world_to_screen_coords(node.write_pos));
-        }
 
         container_collision(&mut sbObject);
 
@@ -688,17 +699,17 @@ fn container_collision(
 ){
     for mut node in &mut sbObject.nodes{
         if node.read_pos.y < -HALF_DIM.y{
-            node.read_pos.y = -HALF_DIM.y;
+            node.write_pos.y = -HALF_DIM.y;
             node.vel.y = 0.0;
         }
 
         if node.read_pos.x > HALF_DIM.x{
-            node.read_pos.x = HALF_DIM.x;
+            node.write_pos.x = HALF_DIM.x;
             node.vel.x = 0.0;
         }
 
         else if node.read_pos.x < -HALF_DIM.x{
-            node.read_pos.x = -HALF_DIM.x;
+            node.write_pos.x = -HALF_DIM.x;
             node.vel.x = 0.0;
         }
     }
@@ -731,7 +742,7 @@ fn simulation_update(
 
         let vector_force = vec_norm * force * dt * ITERATION_DELTA;
 
-        println!("f:{} f1:{} f2:{} p1:{:?} p2:{:?} final_f:{:?}", force, DEFAULT_STIFFNESS * spring_strength, dot * 0.5 * DEFAULT_DAMPENING,world_to_screen_coords(node1.read_pos),world_to_screen_coords(node2.read_pos), Vec2::new(vector_force.x, -vector_force.y));
+        // println!("f:{} f1:{} f2:{} p1:{:?} p2:{:?} final_f:{:?}", force, DEFAULT_STIFFNESS * spring_strength, dot * 0.5 * DEFAULT_DAMPENING,world_to_screen_coords(node1.read_pos),world_to_screen_coords(node2.read_pos), Vec2::new(vector_force.x, -vector_force.y));
 
         sbObject.nodes[connection.i1].vel -= vec_norm * force * dt * ITERATION_DELTA;
         sbObject.nodes[connection.i2].vel += vec_norm * force * dt * ITERATION_DELTA;
