@@ -11,6 +11,7 @@ pub const DEFAULT_RESTING_LENGTH: f32 = 50.0;
 // yes these are default values. Womp Womp
 pub const DEFAULT_STIFFNESS: f32 = 30.0;
 pub const DEFAULT_DAMPENING: f32 = 4.0;
+pub const SKELETON_STIFFNESS: f32 = 10.0;
 
 pub const GRAVITY: Vec2 = Vec2::new(0.0, 9.87);
 

@@ -23,6 +23,21 @@ impl Plugin for SBPlugin{
     }
 }
 
+#[derive(Clone)]
+pub struct DistIndex{
+    pub dist: f32,
+    pub index: usize,
+}
+
+impl DistIndex{
+    fn new(dist: f32, index: usize) -> Self{
+        return DistIndex{
+            dist: dist,
+            index: index,
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct SB{
     pub nodes: Vec<SBNode>,
@@ -75,6 +90,27 @@ impl SB{
         return sb;
     }
 
+    fn get_rel_center(&self, node_index:usize) -> Vec2{
+        let mut dist_index_pairs = vec![DistIndex::new(0.0, 0); self.node_num as usize];
+        let node_index_pos = self.nodes[node_index].read_pos;
+        
+        for i in 0..self.node_num as usize{
+            dist_index_pairs[i] = DistIndex::new((self.nodes[i].read_pos - node_index_pos).length_squared(), i);
+        }
+
+        // yes I am sorry computer
+        dist_index_pairs.sort_by(|a, b| a.dist.total_cmp(&b.dist));
+
+        // gets the center from the closest 4 nodes
+        let mut center = Vec2::ZERO;
+
+        for i in 0..4{
+            center += self.nodes[dist_index_pairs[i].index].read_pos;
+        }
+
+        return center/4.0;
+    }
+
     fn get_center(&self) -> Vec2{
         let mut average_pos = Vec2::ZERO;
         
@@ -111,12 +147,6 @@ impl SB{
             else{
                 average_angle -= (TAU - angle) / (self.node_num as f32);
             }
-
-            // println!("ave a:{}", average_angle);
-        }
-
-        if average_angle.abs() < 0.001{
-            return 0.0;
         }
 
         return average_angle;
@@ -246,7 +276,7 @@ fn bounding_box_collision(
     // println!("coll:{} min_pos_bb1:{} max_pos_bb1:{} min_pos_bb2:{} max_pos_bb2:{}", thing, bb1.min_pos, bb1.max_pos, bb2.min_pos, bb2.max_pos);
 
 
-    return thing;
+    return thing; 
 }
 
 fn soft_body_collision(
@@ -257,37 +287,60 @@ fn soft_body_collision(
         return;
     }
 
-    if true{
-        let mut counter = 0;
-        for mut node in &mut sb1.nodes{
-            // point intersection
+    for counter in 0..(sb1.node_num as usize){
+        let node = &sb1.nodes[counter];
+        if sb_point_intersection(node.read_pos, sb2){
+            // println!("atleast heere");
+            
+            let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.read_pos, sb1.get_rel_center(counter), sb2);
 
-            // println!("atlesast atleast here");
-            if sb_point_intersection(node.read_pos, sb2){
-                // println!("atleast heere");
-                
-                let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.read_pos, sb1.center, sb2);
+            // println!("Collision: pos {:?} center1 {:?} center2 {:?} coll_pt {:?} dist {} node_i {} conn_i {} dot {}", world_to_screen_coords(node.read_pos),world_to_screen_coords(sb1.center),world_to_screen_coords(sb2.center), world_to_screen_coords(coll_pt), dist, counter, conn_index, dot);
 
-                // println!("Collision: pos {:?} center1 {:?} center2 {:?} coll_pt {:?} dist {} node_i {} conn_i {} dot {}", world_to_screen_coords(node.read_pos),world_to_screen_coords(sb1.center),world_to_screen_coords(sb2.center), world_to_screen_coords(coll_pt), dist, counter, conn_index, dot);
+            let connection = &sb2.connections[conn_index];
 
-                let connection = &sb2.connections[conn_index];
-
-                // the program probably found a faulty intersection
-                if dist >= connection.resting_length/2.0{
-                    // println!("here");
-                    counter += 1;
-                    continue;
-                }
-
-                // println!("{}", dot);
-                
-                soft_body_collision_response(&mut node, sb2, connection.i1, connection.i2, coll_pt, dot);
-                
+            // the program probably found a faulty intersection
+            if dist >= connection.resting_length/2.0{
+                continue;
             }
 
-            counter += 1;
+            // println!("{}", dot);
+            // dont we all love the rust borrow checker?
+            soft_body_collision_response(&mut sb1.nodes[counter], sb2, connection.i1, connection.i2, coll_pt, dot);
+            
         }
     }
+
+    
+    // let mut counter = 0;
+    // for mut node in &mut sb1.nodes{
+    //     // point intersection
+
+    //     // println!("atlesast atleast here");
+    //     if sb_point_intersection(node.read_pos, sb2){
+    //         // println!("atleast heere");
+            
+    //         let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.read_pos, sb1.center, sb2);
+
+    //         // println!("Collision: pos {:?} center1 {:?} center2 {:?} coll_pt {:?} dist {} node_i {} conn_i {} dot {}", world_to_screen_coords(node.read_pos),world_to_screen_coords(sb1.center),world_to_screen_coords(sb2.center), world_to_screen_coords(coll_pt), dist, counter, conn_index, dot);
+
+    //         let connection = &sb2.connections[conn_index];
+
+    //         // the program probably found a faulty intersection
+    //         if dist >= connection.resting_length/2.0{
+    //             // println!("here");
+    //             counter += 1;
+    //             continue;
+    //         }
+
+    //         // println!("{}", dot);
+            
+    //         soft_body_collision_response(&mut node, sb2, connection.i1, connection.i2, coll_pt, dot);
+            
+    //     }
+
+    //     counter += 1;
+    // }
+    
 }
 
 fn soft_body_collision_response(
@@ -341,46 +394,26 @@ fn sb_point_intersection(
     let mut intersection_counter_y = 0;
 
     for connection in &sb.connections{
-        // dont want to consider edges
         if !connection.is_edge{
             continue;
         }
 
-        // make sure the line is to the left
-        let lateral = line_pt_lateral(pt, sb.nodes[connection.i1].read_pos, sb.nodes[connection.i2].read_pos);
+        let p1 = sb.nodes[connection.i1].read_pos;
+        let p2 = sb.nodes[connection.i2].read_pos;
 
-        if lateral{
-            let y1 = sb.nodes[connection.i1].read_pos.y;
-            let y2 = sb.nodes[connection.i2].read_pos.y;
+        if pt.y > p1.y.min(p2.y){
+            if pt.y <= p1.y.max(p2.y){
+                if pt.x <= p1.x.max(p2.x){
+                    let x_intersection = (pt.y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y) + p1.x;
 
-            let mut intersect : bool = false;
-
-            // if (y1 - y2).abs() < 0.01 && (pt.y == y1 || pt.y == y2){
-            //     continue;
-            // } 
-
-            if y1 > y2{
-                if pt.y <= y1 && pt.y >= y2{
-                    intersection_counter_y += 1;
-                    intersect = true;
+                    if p1.x == p2.x || pt.x <= x_intersection{
+                        intersection_counter_y += 1;
+                    }
                 }
             }
-            else if y1 < y2{
-                if pt.y >= y1 && pt.y <= y2{
-                    intersection_counter_y += 1;
-                    intersect = true;
-                }
-            }
-
-            // if intersect{
-            //     println!("True: pt:{} n1:{} n2:{}", world_to_screen_coords(pt), world_to_screen_coords(sb.nodes[connection.i1].read_pos), world_to_screen_coords(sb.nodes[connection.i2].read_pos));
-            // }
-            // else{
-            //     println!("False pt:{} n1:{} n2:{}", world_to_screen_coords(pt), world_to_screen_coords(sb.nodes[connection.i1].read_pos), world_to_screen_coords(sb.nodes[connection.i2].read_pos));
-            // }
         }
+
     }
-    // println!("{}", intersection_counter_y);
 
     return intersection_counter_y % 2 == 1;
 }
@@ -433,12 +466,12 @@ fn get_closest_edge(
             continue;
         }
 
-        let mut connection_normal = (pt1.read_pos - pt2.read_pos).normalize().perp();
+        let mut connection_normal = -(pt1.read_pos - pt2.read_pos).normalize().perp();
 
         // make sure normal is facing outwards
-        if (sb.center - closest_pt).normalize().dot(connection_normal) > 0.0{
-            connection_normal = -connection_normal;
-        }
+        // if (sb.center - closest_pt).normalize().dot(connection_normal) > 0.0{
+        //     connection_normal = -connection_normal;
+        // }
 
         let center_to_point = (center - closest_pt).normalize();
 
@@ -517,7 +550,6 @@ fn interact(
 fn spawn_sb(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    // parent: Query<Entity, With<SBParent>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ){
@@ -532,21 +564,128 @@ fn spawn_sb(
     let color = Color::rgb(1.0, 1.0, 1.0);
 
     // cube
+    // let node_vec = vec![
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+    // ];
+
+    // let connection_vec = vec![
+    //     SBConnection::new(0, 1, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 2, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2, 3, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 3, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(1, 2, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt())
+    // ];
+
+    // triangle
+    // let node_vec = vec![
+    //     SBNode::new(Vec2::new(0.0, 0.433 * DEFAULT_RESTING_LENGTH)),
+    //     SBNode::new(Vec2::new(-0.5*DEFAULT_RESTING_LENGTH, -0.433 * DEFAULT_RESTING_LENGTH)),
+    //     SBNode::new(Vec2::new(0.5*DEFAULT_RESTING_LENGTH, -0.433 * DEFAULT_RESTING_LENGTH)),
+    // ];
+
+    // let connection_vec = vec![
+    //     SBConnection::new(0,1,true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(1,2,true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2,0,true, DEFAULT_RESTING_LENGTH),
+    // ];
+
+    // rectangle
+    // let node_vec = vec![
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH)),
+    // ];
+
+    // let connection_vec = vec![
+    //     SBConnection::new(0, 1, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 2, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2, 3, false, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2, 4, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(3, 5, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(4, 5, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 3, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(1, 2, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(2, 5, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(3, 4, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt())
+    // ];
+
+    //tetris 1
+    // let node_vec = vec![
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH*0.5, DEFAULT_RESTING_LENGTH*0.5)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH*0.5, DEFAULT_RESTING_LENGTH*0.5)),
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH*0.5, -DEFAULT_RESTING_LENGTH*0.5)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH*0.5, -DEFAULT_RESTING_LENGTH*0.5)),
+    //     SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH*0.5, -DEFAULT_RESTING_LENGTH*1.5)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH*0.5, -DEFAULT_RESTING_LENGTH*1.5)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH*1.5, -DEFAULT_RESTING_LENGTH*0.5)),
+    //     SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH*1.5, -DEFAULT_RESTING_LENGTH*1.5)),
+    // ];
+
+    // let connection_vec = vec![
+    //     SBConnection::new(0, 1, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 2, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2, 3, false, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(2, 4, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(3, 5, false, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(4, 5, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(3, 6, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(5, 7, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(6, 7, true, DEFAULT_RESTING_LENGTH),
+    //     SBConnection::new(0, 3, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(1, 2, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(2, 5, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(3, 4, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(3, 7, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
+    //     SBConnection::new(5, 6, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt())
+    // ];
+
+    // tetris2
     let node_vec = vec![
-        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
-        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, DEFAULT_RESTING_LENGTH/2.0)),
-        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
-        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH/2.0, -DEFAULT_RESTING_LENGTH/2.0)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH, DEFAULT_RESTING_LENGTH * 1.5)),
+        SBNode::new(Vec2::new(0.0, DEFAULT_RESTING_LENGTH * 1.5)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH, DEFAULT_RESTING_LENGTH * 0.5)),
+        SBNode::new(Vec2::new(0.0, DEFAULT_RESTING_LENGTH * 0.5)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH, -DEFAULT_RESTING_LENGTH * 0.5)),
+        SBNode::new(Vec2::new(0.0, -DEFAULT_RESTING_LENGTH * 0.5)),
+        SBNode::new(Vec2::new(-DEFAULT_RESTING_LENGTH, -DEFAULT_RESTING_LENGTH * 1.5)),
+        SBNode::new(Vec2::new(0.0, -DEFAULT_RESTING_LENGTH * 1.5)),
+        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH, -DEFAULT_RESTING_LENGTH*0.5)),
+        SBNode::new(Vec2::new(DEFAULT_RESTING_LENGTH, -DEFAULT_RESTING_LENGTH*1.5)),
     ];
 
     let connection_vec = vec![
         SBConnection::new(0, 1, true, DEFAULT_RESTING_LENGTH),
-        SBConnection::new(0, 2, true, DEFAULT_RESTING_LENGTH),
         SBConnection::new(1, 3, true, DEFAULT_RESTING_LENGTH),
-        SBConnection::new(2, 3, true, DEFAULT_RESTING_LENGTH),
-        SBConnection::new(0, 3, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt()),
-        SBConnection::new(1, 2, false, (DEFAULT_RESTING_LENGTH*DEFAULT_RESTING_LENGTH*2.0).sqrt())
+        SBConnection::new(3, 5, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(5, 8, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(8, 9, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(9, 7, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(7, 6, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(6, 4, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(4, 2, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(2, 0, true, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(2, 3, false, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(4, 5, false, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(5, 7, false, DEFAULT_RESTING_LENGTH),
+        SBConnection::new(0, 3, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(1, 2, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(2, 5, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(3, 4, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(4, 7, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(5, 6, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(5, 9, false, DEFAULT_RESTING_LENGTH*1.41),
+        SBConnection::new(7, 8, false, DEFAULT_RESTING_LENGTH*1.41),
     ];
+
 
     // let base_skeleton = vec![];
     // let skeleton = vec![];
@@ -647,6 +786,7 @@ fn update_sb(
 ){
     for mut sbObject in sbObjectQuery{
         simulation_update(&mut sbObject, dt as f32);
+
         skeleton_simulation(&mut sbObject, dt as f32);
 
         for mut node in &mut sbObject.nodes{
@@ -662,7 +802,6 @@ fn update_sb(
         sbObject.center = sbObject.get_center();
         sbObject.angle = sbObject.get_angle();
 
-        // println!("c:{:?} a:{}", world_to_screen_coords(sbObject.center), sbObject.angle);
         sbObject.update_skeleton();
     }
 }
@@ -756,7 +895,7 @@ fn skeleton_simulation(
 
         // println!("skel_pos:{:?} node_pos:{:?} vec:{:?}", world_to_screen_coords(*skeleton_pos), world_to_screen_coords(node1.read_pos), Vec2::new(vec.x, -vec.y));
 
-        let force = (10.0 * -vec.length()).clamp(-1000.0, 1000.0);
+        let force = (SKELETON_STIFFNESS * -vec.length()).clamp(-1000.0, 1000.0);
         // let force = 1.0;
 
         // println!("pos {}", vec_norm);
