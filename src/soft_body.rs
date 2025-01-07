@@ -310,37 +310,6 @@ fn soft_body_collision(
         }
     }
 
-    
-    // let mut counter = 0;
-    // for mut node in &mut sb1.nodes{
-    //     // point intersection
-
-    //     // println!("atlesast atleast here");
-    //     if sb_point_intersection(node.read_pos, sb2){
-    //         // println!("atleast heere");
-            
-    //         let (coll_pt, dist, conn_index, dot) = get_closest_edge(node.read_pos, sb1.center, sb2);
-
-    //         // println!("Collision: pos {:?} center1 {:?} center2 {:?} coll_pt {:?} dist {} node_i {} conn_i {} dot {}", world_to_screen_coords(node.read_pos),world_to_screen_coords(sb1.center),world_to_screen_coords(sb2.center), world_to_screen_coords(coll_pt), dist, counter, conn_index, dot);
-
-    //         let connection = &sb2.connections[conn_index];
-
-    //         // the program probably found a faulty intersection
-    //         if dist >= connection.resting_length/2.0{
-    //             // println!("here");
-    //             counter += 1;
-    //             continue;
-    //         }
-
-    //         // println!("{}", dot);
-            
-    //         soft_body_collision_response(&mut node, sb2, connection.i1, connection.i2, coll_pt, dot);
-            
-    //     }
-
-    //     counter += 1;
-    // }
-    
 }
 
 fn soft_body_collision_response(
@@ -466,12 +435,8 @@ fn get_closest_edge(
             continue;
         }
 
+        // pls wind the points clockwise or something
         let mut connection_normal = -(pt1.read_pos - pt2.read_pos).normalize().perp();
-
-        // make sure normal is facing outwards
-        // if (sb.center - closest_pt).normalize().dot(connection_normal) > 0.0{
-        //     connection_normal = -connection_normal;
-        // }
 
         let center_to_point = (center - closest_pt).normalize();
 
